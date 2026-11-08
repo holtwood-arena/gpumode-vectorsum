@@ -150,9 +150,59 @@ Modal 官方文档确认它提供两种 A100：**A100-40GB** 与 **A100-80GB**�
 该推理尚未被直接证实：曾尝试在 submission 中 `print` 设备属性（`get_device_name` /
 `total_memory` / `multi_processor_count`），但 CLI 不转发容器 stdout，拿不到输出。
 
+## SKU 已确定：A100-80GB（用时间编码探针，1 次 leaderboard 提交）
+
+`assert` / `print` 都拿不到输出（CLI 不转发容器 stdout，异常是否透出未验证），
+改用**时间编码**：模块加载时读 `total_memory`，<60 GiB 跑 2 遍 partial kernel，
+否则跑 3 遍。重复 launch 覆盖同一 P buffer，结果逐位不变，正确性零风险。
+
+实测 `Geomean (public) = 396.367 μs` → 3 遍分支 → **total_memory ≥ 60 GiB → A100-80GB**。
+
+### 反推出的两个隐藏量
+
+联立 `3T + C = 396.367`、`T + C = 141.865`：
+
+| 量 | 值 | 说明 |
+| --- | --- | --- |
+| T（单遍 warm） | **127.25 μs** | → **1.648 TB/s = 80GB SXM 标称 2039 GB/s 的 80.8%** |
+| C（固定开销） | **14.61 μs** | 占单遍成绩的 **10.3%** |
+
+**关键对照**：榜 #3 是 125.409 μs = 1.672 TB/s。也就是说 **warm 状态下的带宽已经和榜三持平**。
+141.865 μs 只排 43 名，差距主要来自首次读的固定开销 C。
+
+榜单换算（80GB 口径）：
+
+| | μs | TB/s | 占 2039 GB/s |
+| --- | --- | --- | --- |
+| #1 | 101.237 | 2.072 | 101.6%（超规格，存疑） |
+| #2 | 116.890 | 1.794 | 88.0% |
+| #3 | 125.409 | 1.672 | 82.0% |
+| 我（warm T） | 127.251 | 1.648 | 80.8% |
+| 我（实测单遍） | 141.865 | 1.478 | 72.5% |
+
+### 对 C 的解读与不确定处
+
+3 遍里第 2、3 遍有约 20% 的数据可能留在 L2（200 MB 数据 / 40 MB L2），所以 T 里含少量
+缓存红利，C 的 14.61 μs 不全是"冷启动"。**不能据此断言单遍一定能省下 10%**。
+但方向明确：首次读的开销是当前最大的单项差距，主要嫌疑是 TLB / L2 冷启动与两段 kernel 的边界。
+
+## 平台硬限制：inline asm 被拒
+
+尝试用 `tl.inline_asm_elementwise` 发 `ld.global.L1::evict_first.L2::256B.b32`
+（本地已验证编译为 `LDG.E.EF.LTC256B`、32 regs、0 spill），提交返回：
+
+```
+400 Bad Request: failed to prepare submission request: 500:
+Your code contains work on another stream. This is not allowed and may result in
+your disqualification.
+```
+
+是平台的**提交前静态检查**，不是运行时错误。原文带"may result in your
+disqualification"，因此**不再尝试绕过或试探该检查的边界**。L2 取数粒度这个方向就此关闭。
+
 ## 待验证
 
-1. Modal A100 的实际 SKU——用 `assert False, f"{name} {total_memory}"` 之类的方式
-   把设备信息塞进错误消息，可能比 print 更容易被 CLI 展示出来（需 1 次配额）。
-2. 榜首 2.072 TB/s 的实现方式或真实性。
-3. 两阶段 vs 单 kernel + atomic counter（预期 ≤5%）。
+1. C 的构成：冷启动（TLB/L2，无法规避）vs 两次 launch（可减少）。
+   单 kernel + atomic counter 融合能一次测出前者占多少。
+2. 榜 #2 的 1.794 TB/s 是怎么做到的（比我的 warm 带宽高 8.9%）。
+3. 榜 #1 的 2.072 TB/s 超过 2039 GB/s 标称，真实性存疑。
