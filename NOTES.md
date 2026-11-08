@@ -85,9 +85,51 @@
 - 首战 3 次 + 第一轮扫描 4 次 = 7 次，已触发限流，需等约 46 分钟。
 - 后续调参必须省着用：一次只验证一个最优候选，不要批量扫。
 
+## 第二轮假设验证（全部证伪）
+
+### 1. tail effect —— 证伪
+
+按 108 SM × 8 CTA 估算，CTA 数越多 tail 浪费越小（I4 的 3200 CTA → 8%，
+I1 的 12800 CTA → 1.25%）。实测：
+
+| 配置 | CTA 数 | μs |
+| --- | --- | --- |
+| B4096 I4 W8 | 3200 | **141** |
+| B4096 I2 W8 | 6400 | 143 |
+| B4096 I1 W8 | 12800 | 143 |
+
+更多 CTA 不但没有改善，反而略慢。tail 不是主导因素。
+
+### 2. occupancy —— 证伪
+
+本地 ptxas 实测所有配置（I1/I4/I8/I16、warps 4/8）均为 **32 registers、0 spill**。
+A100 上 32 regs/线程对应 65536/(32×32) = 64 warps/SM，即 **100% occupancy**。
+寄存器不是限制。
+
+### 3. 加载指令宽度 —— 证伪
+
+Triton 3.8 无论用 2D 索引、`max_contiguous`/`multiple_of`、`make_block_ptr`，
+都生成标量 `ld.global.b32`。于是用 `torch.utils.cpp_extension.load_inline`
+写了 CUDA float4 版本（`variants/cuda_f4.py`），强制 `__ldg` 的 16 字节加载 +
+寄存器累加，配合 `__shfl_down_sync` 树形归约。
+
+结果：**147 ± 0.2 μs，比 Triton 的 141 更慢**。加载宽度不是瓶颈。
+
+> 该版本首次提交因指针传参报 `cudaErrorIllegalAddress`——`load_inline` 的 pybind
+> 绑定不会把 Python int 直接转成 `T*`。改为以 `long long` 传地址再
+> `reinterpret_cast` 后通过，test 5/5。
+
+### 结论
+
+三条硬件侧假设全部排除后，141 μs（1.487 TB/s）很可能已接近 **Modal 上这张 A100
+在该评测环境下的实际可达带宽**。一个佐证：若 Modal 提供的是 A100 40GB PCIe
+（标称 1555 GB/s），1.487 TB/s 就是 95.6%，几乎没有余量。
+榜首 101.237 μs（2.072 TB/s）与这个假设冲突，但成因不明，且受每小时 6 次配额
+限制，继续盲试的性价比很低。
+
 ## 待验证
 
-1. 更小的 per-program（8192 / 4096，对应 m=6400 / 12800）能否改善负载均衡与
-   tail effect——受限于流未能测到。
-2. 降低每线程元素数（BLOCK=1024/2048）是否因寄存器压力下降而提升 occupancy。
-3. 两阶段 vs 单 kernel + atomic counter 的差距（预期 ≤5%）。
+1. Modal 分配的 A100 具体 SKU（40GB PCIe / 80GB PCIe / 80GB SXM），直接决定
+   当前成绩是 96% 还是 73% 带宽利用率。
+2. 榜首 2.072 TB/s 的实现方式（是否有公开代码可参考）。
+3. 两阶段 vs 单 kernel + atomic counter（预期 ≤5%）。
