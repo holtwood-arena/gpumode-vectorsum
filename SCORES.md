@@ -14,6 +14,11 @@
 | 2026-11-08 17:17 | vectorsum_v2 | A100 | leaderboard | 142.131 | — | id 969447，未超过 best |
 | 2026-11-08 17:17 | vectorsum_v2 | A100 | leaderboard | **141.865** | **43 / 120** | ✅ **新最佳**。id 969448 |
 | 2026-11-08 17:18 | vectorsum_v2 | A100 | leaderboard | 142.019 | — | id 969449，未超过 best |
+| 2026-11-08 18:15 | vectorsum_v2 | A100 | leaderboard | 396.367 | — | SKU 探针（3-pass 时间编码），确认 A100-80GB。未覆盖 best |
+| 2026-11-08 18:45 | vectorsum_v2 | A100 | leaderboard | 152.463 | — | CUDA 单内核融合，更慢。未覆盖 best |
+| 2026-11-08 18:48 | vectorsum_v2 | A100 | leaderboard | 143.729 | — | 软件流水线 ITERS=16/S=4，更慢。未覆盖 best |
+| 2026-11-08 19:36 | vectorsum_v2 | A100 | benchmark | 152 ± 0.2（best 147） | — | PyTorch `torch.sum` 基线，比本实现慢 7.8% |
+| 2026-11-08 19:38 | vectorsum_v2 | A100 | benchmark | 145 ± 0.2（best 137） | — | 去掉 `evict_first`，比保留慢 2.8%，说明该策略有益 |
 
 ## 该次提交的评测细节
 
