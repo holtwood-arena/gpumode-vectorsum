@@ -127,9 +127,32 @@ Triton 3.8 无论用 2D 索引、`max_contiguous`/`multiple_of`、`make_block_pt
 榜首 101.237 μs（2.072 TB/s）与这个假设冲突，但成因不明，且受每小时 6 次配额
 限制，继续盲试的性价比很低。
 
+## Modal A100 的 SKU 推理
+
+Modal 官方文档确认它提供两种 A100：**A100-40GB** 与 **A100-80GB**，榜单只写 "A100"。
+
+关键证据是两个**完全独立**的实现结果高度一致：
+
+| 实现 | μs | 带宽 |
+| --- | --- | --- |
+| Triton（fp32 树 + 跨块 fp64） | 141 | 1.487 TB/s |
+| CUDA float4（`__ldg` + 寄存器累加） | 147 | 1.426 TB/s |
+
+两条完全不同的代码路径、两种访存指令宽度，都落在 1.42–1.49 TB/s。若 A100-80GB
+（1935/2039 GB/s）能有 30% 的提升空间，至少应当有一个实现吃到一部分。两者都没有，
+更支持"硬件端就是 ~1.5 TB/s"。
+
+若 Modal 分配的是 **A100-40GB PCIe（标称 1555 GB/s）**，则 1.487 TB/s = **95.6%**，
+已到顶。这也解释了榜首 101.237 μs（2.072 TB/s）为何异常——它超出 40GB 规格 33%，
+无法用优化解释，更可能与仓库里已公开讨论的 reward-hack 问题（issue #162
+"reward hacks fabricating benchmark time"）有关。
+
+该推理尚未被直接证实：曾尝试在 submission 中 `print` 设备属性（`get_device_name` /
+`total_memory` / `multi_processor_count`），但 CLI 不转发容器 stdout，拿不到输出。
+
 ## 待验证
 
-1. Modal 分配的 A100 具体 SKU（40GB PCIe / 80GB PCIe / 80GB SXM），直接决定
-   当前成绩是 96% 还是 73% 带宽利用率。
-2. 榜首 2.072 TB/s 的实现方式（是否有公开代码可参考）。
+1. Modal A100 的实际 SKU——用 `assert False, f"{name} {total_memory}"` 之类的方式
+   把设备信息塞进错误消息，可能比 print 更容易被 CLI 展示出来（需 1 次配额）。
+2. 榜首 2.072 TB/s 的实现方式或真实性。
 3. 两阶段 vs 单 kernel + atomic counter（预期 ≤5%）。
