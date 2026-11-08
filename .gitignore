@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
+*.log
+
+# 本地评测产物与缓存
+popcorn-profile-*/
+results.json
+
+# Claude Code 本地状态（定时任务、会话缓存等）
+.claude/
